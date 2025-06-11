@@ -1,3 +1,4 @@
 data/processed/
 data/summaries/
 outputs/
+models/best_model.pt
