@@ -1,0 +1,144 @@
+
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Video Summarization</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                max-width: 800px;
+                margin: 0 auto;
+                padding: 20px;
+            }
+            .form-group {
+                margin-bottom: 15px;
+            }
+            label {
+                display: block;
+                margin-bottom: 5px;
+            }
+            input[type="file"],
+            input[type="number"],
+            input[type="range"],
+            select {
+                width: 100%;
+                padding: 8px;
+                margin-bottom: 10px;
+            }
+            button {
+                background-color: #4CAF50;
+                color: white;
+                padding: 10px 20px;
+                border: none;
+                cursor: pointer;
+            }
+            button:hover {
+                background-color: #45a049;
+            }
+            #results {
+                margin-top: 20px;
+                padding: 20px;
+                border: 1px solid #ddd;
+                display: none;
+            }
+            .frame-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+                gap: 10px;
+                margin-top: 20px;
+            }
+            .frame-item {
+                text-align: center;
+            }
+            .frame-item img {
+                max-width: 100%;
+                height: auto;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Video Summarization</h1>
+        <form id="uploadForm">
+            <div class="form-group">
+                <label for="video">Select Video:</label>
+                <input type="file" id="video" name="video" accept="video/*" required>
+            </div>
+            <div class="form-group">
+                <label for="num_frames">Number of Frames:</label>
+                <input type="number" id="num_frames" name="num_frames" value="10" min="1" max="50">
+            </div>
+            <div class="form-group">
+                <label for="min_score">Minimum Score:</label>
+                <input type="range" id="min_score" name="min_score" value="0.3" min="0" max="1" step="0.1">
+            </div>
+            <div class="form-group">
+                <label for="feature_extractor">Feature Extractor:</label>
+                <select id="feature_extractor" name="feature_extractor">
+                    <option value="resnet50">ResNet50</option>
+                    <option value="efficientnet">EfficientNet</option>
+                </select>
+            </div>
+            <button type="submit">Generate Summary</button>
+        </form>
+        <div id="results">
+            <h2>Results</h2>
+            <div id="metrics"></div>
+            <div class="frame-grid" id="frames"></div>
+        </div>
+        <script>
+            document.getElementById('uploadForm').onsubmit = async (e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                
+                try {
+                    const response = await fetch('/upload', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const data = await response.json();
+                    
+                    if (response.ok) {
+                        showResults(data);
+                    } else {
+                        alert('Error: ' + data.error);
+                    }
+                } catch (error) {
+                    alert('Error: ' + error);
+                }
+            };
+            
+            function showResults(data) {
+                const results = document.getElementById('results');
+                const metrics = document.getElementById('metrics');
+                const frames = document.getElementById('frames');
+                
+                // Show metrics
+                metrics.innerHTML = `
+                    <h3>Metrics</h3>
+                    <p>Number of frames: ${data.num_frames}</p>
+                    <p>Temporal consistency: ${data.metrics.temporal_consistency.toFixed(4)}</p>
+                    <p>Diversity score: ${data.metrics.diversity_score.toFixed(4)}</p>
+                    <p>Score distribution:</p>
+                    <ul>
+                        <li>Mean: ${data.metrics.score_distribution.mean.toFixed(4)}</li>
+                        <li>Std: ${data.metrics.score_distribution.std.toFixed(4)}</li>
+                        <li>Min: ${data.metrics.score_distribution.min.toFixed(4)}</li>
+                        <li>Max: ${data.metrics.score_distribution.max.toFixed(4)}</li>
+                    </ul>
+                `;
+                
+                // Show frames
+                frames.innerHTML = '';
+                data.frames.forEach(frame => {
+                    const div = document.createElement('div');
+                    div.className = 'frame-item';
+                    div.innerHTML = `<img src="${frame}" alt="Summary frame">`;
+                    frames.appendChild(div);
+                });
+                
+                results.style.display = 'block';
+            }
+        </script>
+    </body>
+    </html>
+    
