@@ -8,6 +8,7 @@ from tqdm import tqdm
 import json
 from torchvision.models import resnet50, ResNet50_Weights
 from torchvision import transforms
+from sklearn.metrics import precision_score, recall_score, f1_score, mean_squared_error
 
 from models.transformer_summarizer import TransformerSummarizer
 
@@ -126,11 +127,51 @@ class VideoSummarizer:
         
         return features_list, processed_frames
     
+    def calculate_metrics(self, selected_indices: List[int], total_frames: int, ground_truth_indices: List[int] = None) -> dict:
+        """
+        Calculate evaluation metrics.
+        
+        Args:
+            selected_indices (List[int]): Indices of selected frames
+            total_frames (int): Total number of frames in video
+            ground_truth_indices (List[int], optional): Ground truth frame indices
+            
+        Returns:
+            dict: Dictionary containing evaluation metrics
+        """
+        # Create binary arrays for selected frames
+        selected_binary = np.zeros(total_frames)
+        selected_binary[selected_indices] = 1
+        
+        # If ground truth is not provided, use a simple heuristic
+        # (frames with scores above mean are considered important)
+        if ground_truth_indices is None:
+            # Use a simple heuristic: frames in the middle third are considered important
+            middle_start = total_frames // 3
+            middle_end = (2 * total_frames) // 3
+            ground_truth_indices = list(range(middle_start, middle_end))
+        
+        ground_truth_binary = np.zeros(total_frames)
+        ground_truth_binary[ground_truth_indices] = 1
+        
+        # Calculate metrics
+        precision = precision_score(ground_truth_binary, selected_binary)
+        recall = recall_score(ground_truth_binary, selected_binary)
+        f1 = f1_score(ground_truth_binary, selected_binary)
+        mse = mean_squared_error(ground_truth_binary, selected_binary)
+        
+        return {
+            'precision': float(precision),
+            'recall': float(recall),
+            'f1_score': float(f1),
+            'mse': float(mse)
+        }
+    
     def generate_summary(self,
                         video_path: str,
                         output_dir: str,
-                        num_frames: int = 10,
-                        chunk_size: int = 100) -> Tuple[List[np.ndarray], List[float]]:
+                        num_frames: int = 100,
+                        chunk_size: int = 100) -> Tuple[List[np.ndarray], List[float], dict]:
         """
         Generate a video summary.
         
@@ -141,7 +182,7 @@ class VideoSummarizer:
             chunk_size (int): Number of frames to process at once
             
         Returns:
-            Tuple[List[np.ndarray], List[float]]: Selected frames and their scores
+            Tuple[List[np.ndarray], List[float], dict]: Selected frames, their scores, and evaluation metrics
         """
         # Create output directory
         output_dir = Path(output_dir)
@@ -185,47 +226,94 @@ class VideoSummarizer:
         
         cap.release()
         
+        # Save scores for all frames
+        all_scores_path = output_dir / 'all_frame_scores.json'
+        with open(all_scores_path, 'w') as f:
+            json.dump({
+                'frame_scores': [float(score) for score in all_scores],
+                'total_frames': len(all_scores),
+                'average_score': float(np.mean(all_scores)),
+                'min_score': float(np.min(all_scores)),
+                'max_score': float(np.max(all_scores))
+            }, f, indent=2)
+        print(f"\nAll frame scores saved to: {all_scores_path}")
+        
         # Select top frames
         top_indices = np.argsort(all_scores)[-num_frames:]
         selected_frames = [all_frames[i] for i in top_indices]
         selected_scores = [all_scores[i] for i in top_indices]
+        
+        # Calculate evaluation metrics
+        metrics = self.calculate_metrics(top_indices, len(all_frames))
+        
+        # Save metrics
+        metrics_path = output_dir / 'evaluation_metrics.json'
+        with open(metrics_path, 'w') as f:
+            json.dump(metrics, f, indent=2)
         
         # Save frames
         for i, (frame, score) in enumerate(zip(selected_frames, selected_scores)):
             frame_path = output_dir / f'frame_{i:04d}_score_{score:.4f}.jpg'
             cv2.imwrite(str(frame_path), frame)
         
-        # Save scores
-        scores_path = output_dir / 'frame_scores.json'
-        with open(scores_path, 'w') as f:
+        # Save scores for selected frames
+        selected_scores_path = output_dir / 'selected_frame_scores.json'
+        with open(selected_scores_path, 'w') as f:
             json.dump({
                 'frame_scores': [float(score) for score in selected_scores],
-                'frame_indices': [int(idx) for idx in top_indices]
+                'frame_indices': [int(idx) for idx in top_indices],
+                'num_frames': len(selected_scores),
+                'average_score': float(np.mean(selected_scores)),
+                'min_score': float(np.min(selected_scores)),
+                'max_score': float(np.max(selected_scores))
             }, f, indent=2)
+        print(f"Selected frame scores saved to: {selected_scores_path}")
+            
+        # Create video from selected frames
+        print("\nCreating summary video...")
+        video_output_path = output_dir / "summary_video.mp4"
+        height, width = selected_frames[0].shape[:2]
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        # Set FPS to 10 for a 10-second video (100 frames / 10 seconds = 10 FPS)
+        fps = 10
+        out = cv2.VideoWriter(str(video_output_path), fourcc, fps, (width, height))
         
-        return selected_frames, selected_scores
+        for frame in selected_frames:
+            out.write(frame)
+        out.release()
+        print(f"Summary video saved to: {video_output_path}")
+        
+        return selected_frames, selected_scores, metrics
 
 def main():
     video_path1 = input("Enter the name of the video: ")
     # Set paths
     model_path = 'models/best_model.pt'
     video_path = f"data/videos/{video_path1}"  # Removed extra .mp4
-    output_dir = 'data/summaries/sample'  # Regular sample directory
+    
+    # Create output directory based on video name (without extension)
+    video_name = os.path.splitext(video_path1)[0]
+    output_dir = f'outputs/summaries/{video_name}'  # Create separate directory for each video
     
     print("Initializing video summarizer...")
     summarizer = VideoSummarizer(model_path)
     
     print(f"\nProcessing video: {video_path}")
-    frames, scores = summarizer.generate_summary(
+    frames, scores, metrics = summarizer.generate_summary(
         video_path=video_path,
         output_dir=output_dir,
-        num_frames=10  # Default number of frames
+        num_frames=100  # Default number of frames
     )
     
     print(f"\nSummary generated successfully!")
     print(f"Selected {len(frames)} frames")
     print(f"Average importance score: {np.mean(scores):.4f}")
-    print(f"Output saved to: {output_dir}")
+    print(f"\nEvaluation Metrics:")
+    print(f"Precision: {metrics['precision']:.4f}")
+    print(f"Recall: {metrics['recall']:.4f}")
+    print(f"F1 Score: {metrics['f1_score']:.4f}")
+    print(f"MSE: {metrics['mse']:.4f}")
+    print(f"\nOutput saved to: {output_dir}")
 
 if __name__ == '__main__':
     main() 
